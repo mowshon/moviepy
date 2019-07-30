@@ -16,6 +16,8 @@ from moviepy.decorators import (apply_to_mask,
 from tqdm import tqdm
 import proglog
 
+from bounded_pool_executor import BoundedThreadPoolExecutor
+from threading import RLock
 
 class Clip:
 
@@ -46,6 +48,8 @@ class Clip:
     # >>> Clip._TEMP_FILES_PREFIX = "temp_"
 
     _TEMP_FILES_PREFIX = 'TEMP_MPY_'
+
+    all_frames = {}
 
     def __init__(self):
 
@@ -479,6 +483,39 @@ class Clip:
                 yield t, frame
             else:
                 yield frame
+
+    def add_frame(self, t, dtype, locker):
+        try:
+            print('Start Worker!', t)
+            frame = self.get_frame(t)
+            if (dtype is not None) and (frame.dtype != dtype):
+                frame = frame.astype(dtype)
+
+            #locker.acquire()
+            self.all_frames[t] = frame
+            #locker.release()
+            print('End Worker!', t)
+        except Exception as e:
+            print('ERROR!', str(e))
+
+    @requires_duration
+    @use_clip_fps_by_default
+    def threads_iter_frames(self, fps=None, with_times=False, logger=None, dtype=None):
+        locker = RLock()
+        with BoundedThreadPoolExecutor(max_workers=10) as worker:
+            t_frames = np.arange(0, self.duration, 1.0/fps)
+            for t in t_frames:
+                worker.submit(self.add_frame, t, dtype, locker)
+
+        return self.all_frames
+
+        while True:
+            if len(t_frames) == len(self.all_frames):
+                return self.all_frames
+            else:
+                #print(len(t_frames), len(self.all_frames))
+                #print('Wait last frame...')
+                continue
 
     def close(self):
         """ 
